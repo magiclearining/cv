@@ -237,14 +237,14 @@ for study_type in ['XR_ELBOW','XR_FINGER','XR_FOREARM',
     print('Wt1 train:', Wt1['train'])
     print('Wt1 valid:', Wt1['valid'])
 
-    # model = models.densenet169(pretrained=False)
-    # model.classifier = nn.Sequential(OrderedDict([
-    #     ('fc', nn.Linear(in_features=1664, out_features=1, bias=True)),
-    #     ('sigmoid', nn.Sigmoid())
-    # ]))
+    # model = CNN()
     # model = model.cuda()
 
-    model = CNN()
+    model = models.googlenet(pretrained=True)
+    model.fc = nn.Sequential(OrderedDict([
+        ('fc', nn.Linear(in_features=1024, out_features=1, bias=True)),
+        ('sigmoid', nn.Sigmoid())
+    ]))
     model = model.cuda()
 
     criterion = Loss(Wt1, Wt0)
@@ -256,6 +256,7 @@ for study_type in ['XR_ELBOW','XR_FINGER','XR_FOREARM',
     print()
 
 print(acc)
+# CNN
 # {'XR_ELBOW': tensor(0.6139), 
 # 'XR_FINGER': tensor(0.7143), 
 # 'XR_FOREARM': tensor(0.5865), 
@@ -263,3 +264,12 @@ print(acc)
 # 'XR_HUMERUS': tensor(0.6222), 
 # 'XR_SHOULDER': tensor(0.7268),
 #  'XR_WRIST': tensor(0.7131)}
+
+# GoogleNet
+# {'XR_ELBOW': tensor(0.7468), 
+# 'XR_FINGER': tensor(0.7086), 
+# 'XR_FOREARM': tensor(0.5414), 
+# 'XR_HAND': tensor(0.6168), 
+# 'XR_HUMERUS': tensor(0.6889), 
+# 'XR_SHOULDER': tensor(0.7010), 
+# 'XR_WRIST': tensor(0.7553)}

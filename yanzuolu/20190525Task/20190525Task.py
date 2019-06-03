@@ -14,22 +14,27 @@ from torchvision import transforms
 from torchvision.datasets.folder import pil_loader
 from tqdm import tqdm
 
+from torchnet import meter
+
 data_cat = ['train', 'valid']
+
 
 def get_study_level_data(study_type):
     study_data = {}
     study_label = {'positive': 1, 'negative': 0}
     for phase in data_cat:
-        BASE_DIR = 'MURA-v1.1/%s/%s/' % (phase, study_type)
-        patients = list(os.walk(BASE_DIR))[0][1]
-        study_data[phase] = pd.DataFrame(columns=['path','Count','Label'])
+        columns = ['img_path']
+        BASE_DIR = 'MURA-v1.1/%s_image_paths.csv' % (phase)
+        data = pd.read_csv(BASE_DIR,names=columns)
+        study_data[phase] = pd.DataFrame(columns=['path','Label'])
         i = 0
-        for patient in tqdm(patients):
-            for study in os.listdir(BASE_DIR + patient):
-                label = study_label[study.split('_')[1]]
-                path = BASE_DIR + patient + '/' + study + '/'
-                study_data[phase].loc[i] = [path, len(os.listdir(path)), label]
-                i+=1
+        for img in tqdm(data['img_path']):
+            path_type = img.split('/')[2]
+            if path_type == study_type:
+                label = study_label[img.split('_')[2].split('/')[0]]
+                path = img
+                study_data[phase].loc[i] = [path, label]
+                i += 1
     return study_data
 
 class MURA_Dataset(Dataset):
@@ -43,13 +48,8 @@ class MURA_Dataset(Dataset):
     
     def __getitem__(self, idx):
         study_path = self.df.iloc[idx, 0]
-        count = self.df.iloc[idx, 1]
-        images = []
-        for i in range(count):
-            image = pil_loader(study_path + 'image%s.png' % (i+1))
-            images.append(self.transform(image))
-        images = torch.stack(images)
-        label = self.df.iloc[idx, 2]
+        label = self.df.iloc[idx, 1]
+        images = self.transform(pil_loader(study_path))
         sample = {'images': images, 'label': label}
         return sample
 
@@ -79,24 +79,30 @@ def train_model(model, criterion, optimizer, dataloaders, scheduler,
     since = time.time()
     best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 0.0
+    best_kappa = 0.0
     costs = {x:[] for x in data_cat} # for storing costs per epoch
     accs = {x:[] for x in data_cat} # for storing accuracies per epoch
     print('Train batches:', len(dataloaders['train']))
     print('Valid batches:', len(dataloaders['valid']), '\n')
     for epoch in range(num_epochs):
+        confusion_matrix = {x: meter.ConfusionMeter(2, normalized=False) 
+                             for x in data_cat}
         print('Epoch {}/{}'.format(epoch+1, num_epochs))
         print('-' * 10)
         # Each epoch has a training and validation phase
         for phase in data_cat:
+            if phase == 'train':
+                torch.set_grad_enabled(True)
+            if phase == 'valid':
+                torch.set_grad_enabled(False)
             model.train(phase=='train')
             running_loss = 0.0
             running_corrects = 0
             # Iterate over data.
             for i, data in enumerate(dataloaders[phase]):
                 # get the inputs
-                print(i, end='\r')
-                inputs = data['images'][0]
-                labels = data['label'].type(torch.FloatTensor)
+                inputs = data['images']
+                labels = data['label']
                 # wrap them in Variable
                 inputs = Variable(inputs.cuda())
                 labels = Variable(labels.cuda())
@@ -104,27 +110,47 @@ def train_model(model, criterion, optimizer, dataloaders, scheduler,
                 optimizer.zero_grad()
                 # forward
                 outputs = model(inputs)
-                outputs = torch.mean(outputs)
-                loss = criterion(outputs, labels, phase)
-                running_loss += loss.data[0]
+                loss = criterion(outputs, labels)
+                print("batch ", i, ": ",loss ,end='\r')
+                running_loss += loss
                 # backward + optimize only if in training phase
                 if phase == 'train':
                     loss.backward()
                     optimizer.step()
                 # statistics
-                preds = (outputs.data > 0.5).type(torch.cuda.FloatTensor)
+                preds = torch.max(outputs, 1)[1]
+                # print(outputs)
+                # print(preds)
+                # print(labels)
                 running_corrects += torch.sum(preds == labels.data)
+                confusion_matrix[phase].add(preds, labels.data)
             epoch_loss = running_loss / dataset_sizes[phase]
             epoch_acc = running_corrects.type(torch.FloatTensor) / dataset_sizes[phase]
             costs[phase].append(epoch_loss)
             accs[phase].append(epoch_acc)
+            print()
             print('{} Loss: {:.4f} Acc: {:.4f}'.format(
                 phase, epoch_loss, epoch_acc))
+
+            mat = confusion_matrix[phase].value()
+            a1 = mat[0][0] + mat[1][0]
+            b1 = mat[0][0] + mat[0][1]
+            a2 = mat[0][1] + mat[1][1]
+            b2 = mat[1][0] + mat[1][1]
+            s = a1 + a2
+            p0 = (mat[0][0] + mat[1][1]) / s
+            pe = (a1 * b1 + a2 * b2) / (s * s)
+            k = (p0 - pe) / (1 - pe)
+            print('Confusion Meter:\n', mat)
+            print("kappa: ", k)
+            print()
+
             # deep copy the model
             if phase == 'valid':
                 scheduler.step(epoch_loss)
                 if epoch_acc > best_acc:
                     best_acc = epoch_acc
+                    best_kappa = k
                     best_model_wts = copy.deepcopy(model.state_dict())
         time_elapsed = time.time() - since
         print('Time elapsed: {:.0f}m {:.0f}s'.format(
@@ -134,59 +160,11 @@ def train_model(model, criterion, optimizer, dataloaders, scheduler,
     print('Training complete in {:.0f}m {:.0f}s'.format(
         time_elapsed // 60, time_elapsed % 60))
     print('Best valid Acc: {:4f}'.format(best_acc))
+    print('Best valid kappa: {:4f}'.format(best_kappa))
     # plot_training(costs, accs)
     # load best model weights
     model.load_state_dict(best_model_wts)
-    return model, best_acc
-
-def plot_training(costs, accs):
-    '''
-    Plots curve of Cost vs epochs and Accuracy vs epochs for 'train' and 'valid' sets during training
-    '''
-    train_acc = accs['train']
-    valid_acc = accs['valid']
-    train_cost = costs['train']
-    valid_cost = costs['valid']
-    epochs = range(len(train_acc))
-
-    plt.figure(figsize=(10, 5))
-    
-    plt.subplot(1, 2, 1,)
-    plt.plot(epochs, train_acc)
-    plt.plot(epochs, valid_acc)
-    plt.legend(['train', 'valid'], loc='upper left')
-    plt.title('Accuracy')
-    
-    plt.subplot(1, 2, 2)
-    plt.plot(epochs, train_cost)
-    plt.plot(epochs, valid_cost)
-    plt.legend(['train', 'valid'], loc='upper left')
-    plt.title('Cost')
-    
-    plt.show()
-
-def n_p(x):
-    '''convert numpy float to Variable tensor float'''    
-    return Variable(torch.cuda.FloatTensor([x]), requires_grad=False)
-
-def get_count(df, cat):
-    '''
-    Returns number of images in a study type dataframe which are of abnormal or normal
-    Args:
-    df -- dataframe
-    cat -- category, "positive" for abnormal and "negative" for normal
-    '''
-    return df[df['path'].str.contains(cat)]['Count'].sum()
-
-class Loss(torch.nn.modules.Module):
-    def __init__(self, Wt1, Wt0):
-        super(Loss, self).__init__()
-        self.Wt1 = Wt1
-        self.Wt0 = Wt0
-        
-    def forward(self, inputs, targets, phase):
-        loss = - (self.Wt1[phase] * targets * inputs.log() + self.Wt0[phase] * (1 - targets) * (1 - inputs).log())
-        return loss
+    return model, best_acc, best_kappa
 
 class CNN(nn.Module):
     def __init__(self):
@@ -199,11 +177,10 @@ class CNN(nn.Module):
         self.conv2 = nn.Sequential(
             nn.Conv2d(16, 32, 3, 1, 1),
             nn.ReLU(),
-            nn.MaxPool2d(2)
+            nn.MaxPool2d(2),
         ) # 16 * 112 * 112 - 32 * 56 * 56
         self.out = nn.Sequential(
-            nn.Linear(32 * 56 * 56, 1),
-            nn.Sigmoid()
+            nn.Linear(32 * 56 * 56, 2),
         )
     
     def forward(self, x):
@@ -214,62 +191,49 @@ class CNN(nn.Module):
         return output
 
 acc = {}
+kappa = {}
 
-for study_type in ['XR_ELBOW','XR_FINGER','XR_FOREARM',
-'XR_HAND','XR_HUMERUS','XR_SHOULDER','XR_WRIST']:
+for study_type in ['XR_SHOULDER','XR_FINGER','XR_FOREARM','XR_HAND','XR_HUMERUS','XR_ELBOW','XR_WRIST']:
 
     print(study_type, ": ")
     study_data = get_study_level_data(study_type)
-    dataloaders = get_dataloaders(study_data, batch_size=1)
+    dataloaders = get_dataloaders(study_data, batch_size=16)
     dataset_sizes = {x: len(study_data[x]) for x in data_cat}
-
-    # #### Build model
-    # tai = total abnormal images, tni = total normal images
-    tai = {x: get_count(study_data[x], 'positive') for x in data_cat}
-    tni = {x: get_count(study_data[x], 'negative') for x in data_cat}
-    Wt1 = {x: n_p(tni[x] / (tni[x] + tai[x])) for x in data_cat}
-    Wt0 = {x: n_p(tai[x] / (tni[x] + tai[x])) for x in data_cat}
-
-    print('tai:', tai)
-    print('tni:', tni, '\n')
-    print('Wt0 train:', Wt0['train'])
-    print('Wt0 valid:', Wt0['valid'])
-    print('Wt1 train:', Wt1['train'])
-    print('Wt1 valid:', Wt1['valid'])
 
     # model = CNN()
     # model = model.cuda()
 
-    model = models.googlenet(pretrained=True)
-    model.fc = nn.Sequential(OrderedDict([
-        ('fc', nn.Linear(in_features=1024, out_features=1, bias=True)),
-        ('sigmoid', nn.Sigmoid())
-    ]))
+    # model = models.googlenet(pretrained=True)
+    # model.fc = nn.Sequential(OrderedDict([
+    #     ('fc', nn.Linear(in_features=1024, out_features=2, bias=True))
+    # ]))
+    # model = model.cuda()
+
+    model = models.alexnet(pretrained=True)
+    model.classifier = nn.Sequential(
+        nn.Dropout(p=0.5),
+        nn.Linear(in_features=9216, out_features=4096, bias=True),
+        nn.ReLU(inplace=True),
+        nn.Dropout(p=0.5),
+        nn.Linear(in_features=4096, out_features=4096, bias=True),
+        nn.ReLU(inplace=True),
+        nn.Linear(in_features=4096, out_features=2, bias=True)
+    )
     model = model.cuda()
 
-    criterion = Loss(Wt1, Wt0)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=1, verbose=True)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=1,verbose=True)
 
-    model, acc[study_type] = train_model(model, criterion, optimizer, dataloaders, scheduler, dataset_sizes, num_epochs=5)
+    model, acc[study_type], kappa[study_type] = train_model(model, criterion, optimizer, dataloaders, scheduler, dataset_sizes, num_epochs=10)
+    torch.save(model.state_dict(), study_type + '-params.pkl')
     print('-' * 10)
     print()
+    torch.cuda.empty_cache()
 
-print(acc)
-# CNN
-# {'XR_ELBOW': tensor(0.6139), 
-# 'XR_FINGER': tensor(0.7143), 
-# 'XR_FOREARM': tensor(0.5865), 
-# 'XR_HAND': tensor(0.6168), 
-# 'XR_HUMERUS': tensor(0.6222), 
-# 'XR_SHOULDER': tensor(0.7268),
-#  'XR_WRIST': tensor(0.7131)}
-
-# GoogleNet
-# {'XR_ELBOW': tensor(0.7468), 
-# 'XR_FINGER': tensor(0.7086), 
-# 'XR_FOREARM': tensor(0.5414), 
-# 'XR_HAND': tensor(0.6168), 
-# 'XR_HUMERUS': tensor(0.6889), 
-# 'XR_SHOULDER': tensor(0.7010), 
-# 'XR_WRIST': tensor(0.7553)}
+f = open("result.txt",'w')
+for item in acc:
+    print()
+    f.write(item + "accuracy: " + str(acc[item]) + "\n")
+    f.write(item + "kappa: " + str(kappa[item]) + "\n")
+f.close()

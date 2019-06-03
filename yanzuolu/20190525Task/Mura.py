@@ -18,8 +18,8 @@ from torchnet import meter
 
 data_cat = ['train', 'valid']
 
-
 def get_study_level_data(study_type):
+
     study_data = {}
     study_label = {'positive': 1, 'negative': 0}
     for phase in data_cat:
@@ -54,6 +54,7 @@ class MURA_Dataset(Dataset):
         return sample
 
 def get_dataloaders(data, batch_size=8, study_level=False):
+
     data_transforms = {
         'train': transforms.Compose([
             transforms.Resize((224,224)),
@@ -76,6 +77,7 @@ def get_dataloaders(data, batch_size=8, study_level=False):
 
 def train_model(model, criterion, optimizer, dataloaders, scheduler, 
                 dataset_sizes, num_epochs):
+
     since = time.time()
     best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 0.0
@@ -111,7 +113,6 @@ def train_model(model, criterion, optimizer, dataloaders, scheduler,
                 # forward
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
-                print("batch ", i, ": ",loss ,end='\r')
                 running_loss += loss
                 # backward + optimize only if in training phase
                 if phase == 'train':
@@ -165,75 +166,3 @@ def train_model(model, criterion, optimizer, dataloaders, scheduler,
     # load best model weights
     model.load_state_dict(best_model_wts)
     return model, best_acc, best_kappa
-
-class CNN(nn.Module):
-    def __init__(self):
-        super(CNN, self).__init__()
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(3, 16, 3, 1, 1),
-            nn.ReLU(),
-            nn.MaxPool2d(2)
-        ) # 3 * 224 * 224 - 16 * 112 * 112
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(16, 32, 3, 1, 1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-        ) # 16 * 112 * 112 - 32 * 56 * 56
-        self.out = nn.Sequential(
-            nn.Linear(32 * 56 * 56, 2),
-        )
-    
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = x.view(x.size()[0], -1)
-        output = self.out(x)
-        return output
-
-acc = {}
-kappa = {}
-
-for study_type in ['XR_SHOULDER','XR_FINGER','XR_FOREARM','XR_HAND','XR_HUMERUS','XR_ELBOW','XR_WRIST']:
-
-    print(study_type, ": ")
-    study_data = get_study_level_data(study_type)
-    dataloaders = get_dataloaders(study_data, batch_size=16)
-    dataset_sizes = {x: len(study_data[x]) for x in data_cat}
-
-    # model = CNN()
-    # model = model.cuda()
-
-    # model = models.googlenet(pretrained=True)
-    # model.fc = nn.Sequential(OrderedDict([
-    #     ('fc', nn.Linear(in_features=1024, out_features=2, bias=True))
-    # ]))
-    # model = model.cuda()
-
-    model = models.alexnet(pretrained=True)
-    model.classifier = nn.Sequential(
-        nn.Dropout(p=0.5),
-        nn.Linear(in_features=9216, out_features=4096, bias=True),
-        nn.ReLU(inplace=True),
-        nn.Dropout(p=0.5),
-        nn.Linear(in_features=4096, out_features=4096, bias=True),
-        nn.ReLU(inplace=True),
-        nn.Linear(in_features=4096, out_features=2, bias=True)
-    )
-    model = model.cuda()
-
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=1,verbose=True)
-
-    model, acc[study_type], kappa[study_type] = train_model(model, criterion, optimizer, dataloaders, scheduler, dataset_sizes, num_epochs=10)
-    torch.save(model.state_dict(), study_type + '-params.pkl')
-    print('-' * 10)
-    print()
-    torch.cuda.empty_cache()
-
-f = open("result.txt",'w')
-for item in acc:
-    print()
-    f.write(item + "accuracy: " + str(acc[item]) + "\n")
-    f.write(item + "kappa: " + str(kappa[item]) + "\n")
-f.close()

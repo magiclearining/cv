@@ -11,13 +11,11 @@ function [output] = filter3(conv_layer, bias_parameter, img, step, pad)
     out_x_index = 1;
     pos_x = 1;
     while(pos_x <= size(img_pad, 1) - conv_size)
-      for i = 1:size(conv_layer, 4)
-        output(out_x_index, out_y_index, i) += sum(sum(sum(conv_layer(:, :, :, i) .* double(img_pad(pos_x : pos_x+conv_size -1, pos_y : pos_y+conv_size-1 , :))))) + bias_parameter(i);
-      end
-      pos_x += step;
-      out_x_index += 1;
+        output(out_y_index, out_x_index, :) = output(out_y_index, out_x_index,:) + reshape(sum(sum(sum(conv_layer .* double(img_pad(pos_x : pos_x+conv_size -1, pos_y : pos_y+conv_size-1 , :))))), 1,1,size(conv_layer, 4)) + reshape(bias_parameter, 1,1,size(conv_layer, 4));
+      pos_x =  pos_x + step;
+      out_x_index = out_x_index + 1;
     end
-    pos_y += step;
-    out_y_index += 1;
+    pos_y = pos_y + step;
+    out_y_index = out_y_index + 1;
   end    
 end

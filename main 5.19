@@ -1,0 +1,72 @@
+import torch
+from torch import optim,nn
+import visdom
+import torchvision
+from torch.utils.data import DataLoader
+
+from cnn_mura_my import MURA_dataset
+from resNet import ResNet18
+from tqdm import tqdm
+
+batchsz = 32
+lr = 1e-3
+epochs =10
+device = torch.device('cuda')
+torch.manual_seed(1234)
+
+train_db = MURA_dataset(224,'train','XR_SHOULDER')
+test_db = MURA_dataset(224,'valid','XR_SHOULDER')
+
+train_loader = DataLoader(train_db,batch_size=batchsz,shuffle=True)
+test_loader = DataLoader(test_db,batch_size=batchsz)
+
+
+#重点！！！！测试函数来了！！！！
+def evalute(model , loader):
+    correct = 0
+    total = len(loader.dataset)
+    for x,y in loader:
+        x,y = x.to(device),y.to(device)
+        with torch.no_grad():
+            logits = model(x)
+            pred = logits.argmax(dim = 1)
+        correct += torch.eq(pred,y).sum().float().item()
+
+    return  correct/total
+
+
+def main():
+    model = ResNet18(2).to(device)
+    optimizer = optim.Adam(model.parameters(),lr = lr)
+    criteon = nn.CrossEntropyLoss()
+    best_acc = 0
+    for epoch in range(epochs):
+
+        for step,(x,y) in tqdm(enumerate(train_loader)):
+            # x:[b,3,224,224] , y:[b]
+            x,y = x.to(device),y.to(device)
+
+            logits = model(x)
+            loss = criteon(logits , y)
+            # 下面是一个优化器
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        if epoch % 2 == 0:
+
+            tra_acc = evalute(model,train_loader)
+            print("tow epoch has done")
+
+            if tra_acc > best_acc:
+                best_epoch = epoch
+                best_acc = tra_acc
+                print("now acc is ",tra_acc)
+
+                torch.save(model.state_dict(),'best.mdl')
+                #print("")
+
+    print("best acc :",best_acc,'best epoch ：',best_epoch)
+
+if __name__ == '__main__':
+    main()

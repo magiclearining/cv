@@ -1,0 +1,79 @@
+import torch
+import torch.nn as nn
+from torch.autograd import Variable
+import torch.utils.data as Data
+import torchvision
+import matplotlib.pyplot as plt
+from torchvision import transforms
+from torch.utils.data import DataLoader, Dataset
+from torchvision.datasets.folder import pil_loader
+import pandas as pd
+from tqdm import tqdm
+from PIL import Image
+
+class MURA_dataset(Dataset):
+    def __init__(self,resize,modle,style):
+        super(MURA_dataset,self).__init__()
+        self.resize = resize
+        self.modle = modle
+        self.style = style
+
+        study_label = {'positive': 1, 'negative': 0}
+        images , labels = [],[]
+        phase = self.modle
+        columns = ['img_path']
+        BASE_DIR = 'MURA-v1.1/%s_image_paths.csv' % (phase)
+        data = pd.read_csv(BASE_DIR, names=columns)
+        #注意这里的names，传入必须为列表类型
+        for img in tqdm(data['img_path']):
+            path_type = img.split('/')[2]
+            if path_type == self.style:
+                label = study_label[img.split('_')[2].split('/')[0]]
+                # MURA-v1.1/train/XR_SHOULDER/patient00001/study1_positive/image1.png
+                label = int(label)
+                images.append(img)
+                labels.append(label)
+
+        self.images = images
+
+        print(len(images))
+        #print(images[0])
+        self.labels = labels
+
+
+    def __len__(self):
+        return len(self.images)
+    #返回长度
+    def __getitem__(self, idx):
+        #idx~[0-len(images)]
+        img , label = self.images[idx],self.labels[idx]
+
+        tf = transforms.Compose(
+            [
+            lambda x:Image.open(x).convert('RGB'),
+            transforms.Resize((self.resize,self.resize)),
+            transforms.RandomRotation(15),
+            transforms.CenterCrop(self.resize),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485,0.456,0.406],
+                                 std=[0.229,0.224,0.225])
+            ]
+        )
+        img = tf(img)
+        label = torch.tensor(label)
+        return img ,label
+
+
+def main():
+    import visdom
+    import time
+    viz = visdom.Visdom()
+    db =  MURA_dataset(244,'train','XR_SHOULDER')
+
+    x,y = next(iter(db))
+    print('sample: ',x.shape,y.shape,y)
+    loader = DataLoader(db,batch_size=32,shuffle = True)
+    for x,y in loader:
+        viz.images(x,nrow=8,win='batch',opts= dict(title = 'sample_x'))
+if __name__ == '__main__':
+    main()

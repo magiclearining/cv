@@ -7,3 +7,9 @@ MURA：
   新加了3个FC层的week16_7_21_tf2_3FC及其训练60个epoch的模型参数，90个epoch后准确率在70左右，120个epoch后准确率在75左右
 
   新加了densenet，算力和显存有限，准确率也只有75
+
+
+
+chest X Ray 14:
+  在chest X Ray 文件夹中
+  
